@@ -42,11 +42,18 @@ function toKatakana(word) {
   );
 }
 
+// 「文字の間に挟まってもOK」とみなす記号・空白だけを対象にする。
+// (以前は \W を使っていたが、JavaScriptの \W は日本語の文字も
+//  「記号扱い」してしまうため、間に無関係な日本語が入っても
+//  マッチしてしまう不具合があった。ここでは実際に回避策で
+//  使われがちな、半角/全角スペースや記号だけに絞る)
+const SEPARATOR = "[\\s\\u3000.\\-_*＊・~〜]*";
+
 function toLooseRegex(word) {
   const normalized = toKatakana(word);
   if (normalized.length < 2) return normalized;
   const chars = [...normalized].map(escapeRegExp);
-  return new RegExp(chars.join("\\W*"));
+  return new RegExp(chars.join(SEPARATOR));
 }
 
 const ALL_WORDS_RAW = [
