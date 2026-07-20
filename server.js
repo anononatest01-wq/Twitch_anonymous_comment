@@ -25,7 +25,7 @@ const EXT_SECRET = process.env.EXT_SECRET;         // JWT検証用の鍵
 const BOT_CLIENT_ID = process.env.BOT_CLIENT_ID;   // Botが使うアプリのClient ID
 const BOT_ACCESS_TOKEN = process.env.BOT_ACCESS_TOKEN; // Botのアクセストークン
 const BOT_USER_ID = process.env.BOT_USER_ID;       // BotアカウントのユーザーID
-const STREAMER_ACCESS_TOKEN = process.env.STREAMER_ACCESS_TOKEN; // 配信者本人のトークン(AutoMod判定用)
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // 匿名コメント専用の判定サービス用キー
 const PORT = process.env.PORT || 3001;
 
 // 設定値
@@ -154,44 +154,39 @@ function checkComment(text, viewerId) {
 }
 
 // ---------------------------------------------
-// Twitch公式のAutoMod判定APIを呼び出す関数。
-// あなたの配信のAutoMod設定(侮辱/差別/性的表現/いじめ等、8カテゴリ)を基準に、
-// このコメントが通常のチャットで許可されるレベルかどうかを判定してもらう。
-// ※これを機能させるには、Twitchの配信者設定(クリエイターダッシュボード→
-//   設定→モデレーション)でAutoModの各カテゴリのレベルを0以外に
-//   設定しておく必要があります。全部0(オフ)のままだと何も弾かれません。
+// 匿名コメント専用の判定サービス(OpenAI Moderation API)を呼び出す関数。
+// これはTwitch本体のAutoMod設定とは完全に無関係な、別のサービスなので、
+// ここでどれだけ厳しく判定しても「通常のTwitchチャット」には一切影響しない。
+// ヘイト・暴力・嫌がらせ・性的表現などのカテゴリで判定してくれる。
 // ---------------------------------------------
-async function checkAutoMod(broadcasterId, text) {
-  if (!STREAMER_ACCESS_TOKEN) {
-    // トークンが未設定の場合は判定をスキップする(単語リストのみで運用)
+async function checkModerationApi(text) {
+  if (!OPENAI_API_KEY) {
+    // キーが未設定の場合は判定をスキップする(単語リストのみで運用)
     return true;
   }
 
-  const response = await fetch(
-    `https://api.twitch.tv/helix/moderation/enforcements/status?broadcaster_id=${broadcasterId}&moderator_id=${broadcasterId}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${STREAMER_ACCESS_TOKEN}`,
-        "Client-Id": BOT_CLIENT_ID,
-      },
-      body: JSON.stringify({
-        data: [{ msg_id: `${Date.now()}`, msg_text: text }],
-      }),
-    }
-  );
+  const response = await fetch("https://api.openai.com/v1/moderations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "omni-moderation-latest",
+      input: text,
+    }),
+  });
 
   if (!response.ok) {
-    // AutoMod判定でエラーが出ても、単語リストの判定は既に通っているので
-    // 投稿自体は続行させる(判定APIの一時不調でコメント機能を止めないため)
-    console.warn("AutoMod判定エラー(スキップして続行):", await response.text());
+    // 判定サービス側でエラーが出ても、単語リストの判定は既に通っているので
+    // 投稿自体は続行させる(一時的な不調でコメント機能を止めないため)
+    console.warn("判定サービスエラー(スキップして続行):", await response.text());
     return true;
   }
 
   const result = await response.json();
-  // is_permitted が false なら、AutoMod的にNGと判断されたコメント
-  return result.data?.[0]?.is_permitted !== false;
+  // flagged が true なら、不適切と判定されたコメント
+  return result.results?.[0]?.flagged !== true;
 }
 
 // Twitch公式のHelix API「Send Chat Message」を呼び出す
@@ -234,9 +229,10 @@ app.post("/comment", verifyTwitchJwt, async (req, res) => {
   }
 
   try {
-    // 単語リストを通過したコメントを、さらにTwitch公式のAutoMod基準でも確認する
-    const passedAutoMod = await checkAutoMod(channelId, text);
-    if (!passedAutoMod) {
+    // 単語リストを通過したコメントを、さらに専用の判定サービスでも確認する
+    // (これはTwitch本体には影響しないので、通常チャットは今まで通り)
+    const passedModeration = await checkModerationApi(text);
+    if (!passedModeration) {
       return res.status(400).json({ error: "不適切な表現が含まれています" });
     }
 
