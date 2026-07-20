@@ -120,8 +120,8 @@ function getAnonId(viewerId) {
   const hash = crypto
     .createHash("sha256")
     .update(`${viewerId}-${periodKey}`)
-    .digest("hex");
-  return hash.slice(0, 4).toUpperCase();
+    .digest("base62");
+  return hash.slice(0, 5).toUpperCase();
 }
 
 
@@ -255,7 +255,7 @@ app.post("/comment", verifyTwitchJwt, async (req, res) => {
     // 同じ人が送ったコメントかどうかは区別できるように、
     // 短い匿名IDを頭につけてから投稿する
     const anonId = getAnonId(viewerId);
-    const anonMessage = `[匿名:${anonId}] ${text}`;
+    const anonMessage = `${anonId}] ${text}`;
 
     await postToTwitchChat(channelId, anonMessage);
 
