@@ -6,6 +6,7 @@ const express = require("express");
 const jwt = require("jsonwebtoken");   // JWT(Twitchが視聴者に発行する認証チケット)を検証する道具
 const fetch = require("node-fetch");   // Twitchの公式APIを呼び出すための道具
 const cors = require("cors");          // 拡張機能側(別ドメイン)からのアクセスを許可する
+const crypto = require("crypto");      // 匿名IDを作るためのハッシュ計算に使う(Node.js標準機能)
 const NG_WORDS = require("./ngWords");
 
 const app = express();
@@ -24,6 +25,7 @@ const EXT_SECRET = process.env.EXT_SECRET;         // JWT検証用の鍵
 const BOT_CLIENT_ID = process.env.BOT_CLIENT_ID;   // Botが使うアプリのClient ID
 const BOT_ACCESS_TOKEN = process.env.BOT_ACCESS_TOKEN; // Botのアクセストークン
 const BOT_USER_ID = process.env.BOT_USER_ID;       // BotアカウントのユーザーID
+const STREAMER_ACCESS_TOKEN = process.env.STREAMER_ACCESS_TOKEN; // 配信者本人のトークン(AutoMod判定用)
 const PORT = process.env.PORT || 3001;
 
 // 設定値
@@ -63,9 +65,61 @@ function verifyTwitchJwt(req, res, next) {
   }
 }
 
+// 匿名IDをどの頻度で切り替えるか。"daily"(毎日) か "weekly"(毎週)を選べる
+const ID_ROTATION = process.env.ID_ROTATION || "daily";
+
 // ---------------------------------------------
-// コメント内容のチェック
+// 表記ゆれ対策: 全角/半角をそろえたり、判定しやすい形に変換する
 // ---------------------------------------------
+function normalizeText(text) {
+  // NFKC正規化: 全角英数字を半角に、全角記号を半角に、など表記ゆれをそろえる
+  return text.normalize("NFKC");
+}
+
+// ---------------------------------------------
+// 現在の「期間キー」を作る。この値が変わると匿名IDも自動的に変わる
+// 日本時間(JST)を基準に計算する
+// ---------------------------------------------
+function getPeriodKey(rotation) {
+  // 日本時間に変換
+  const jstString = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+  const jst = new Date(jstString);
+
+  if (rotation === "weekly") {
+    // 「その年の何週目か」を計算する(月曜始まり)
+    const dayNum = (jst.getDay() + 6) % 7; // 月曜=0になるよう調整
+    const thursday = new Date(jst);
+    thursday.setDate(jst.getDate() - dayNum + 3);
+    const yearStart = new Date(thursday.getFullYear(), 0, 1);
+    const weekNumber = Math.ceil(((thursday - yearStart) / 86400000 + 1) / 7);
+    return `${thursday.getFullYear()}-W${weekNumber}`;
+  }
+
+  // デフォルト: daily(日付が変わるとリセットされる)
+  const y = jst.getFullYear();
+  const m = String(jst.getMonth() + 1).padStart(2, "0");
+  const d = String(jst.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// ---------------------------------------------
+// 視聴者ごとに固定の短い匿名IDを作る関数
+// 同じ人・同じ期間なら常に同じIDになるが、
+// 期間(日付/週)が変わると自動的に別のIDに切り替わる
+// 元のuser_idはハッシュ化されているので推測できない
+// ---------------------------------------------
+function getAnonId(viewerId) {
+  const periodKey = getPeriodKey(ID_ROTATION);
+  // viewerId(視聴者ID)と期間キーを混ぜてからハッシュ化する
+  // → 同じ人でも期間が変わればIDが変わる、というのがポイント
+  const hash = crypto
+    .createHash("sha256")
+    .update(`${viewerId}-${periodKey}`)
+    .digest("hex");
+  return hash.slice(0, 4).toUpperCase();
+}
+
+
 function checkComment(text, viewerId) {
   if (!text || text.trim().length === 0) {
     return "コメントが空です";
@@ -73,11 +127,24 @@ function checkComment(text, viewerId) {
   if (text.length > MAX_LENGTH) {
     return `${MAX_LENGTH}文字以内で入力してください`;
   }
-  for (const word of NG_WORDS) {
-    if (text.includes(word)) {
-      return "不適切な表現が含まれています";
+
+  // 全角/半角などの表記ゆれをそろえてから判定する
+  const normalized = normalizeText(text);
+
+  for (const rule of NG_WORDS) {
+    if (rule instanceof RegExp) {
+      // 正規表現のルールの場合
+      if (rule.test(normalized)) {
+        return "不適切な表現が含まれています";
+      }
+    } else {
+      // 通常の文字列(単語)のルールの場合
+      if (normalized.includes(rule)) {
+        return "不適切な表現が含まれています";
+      }
     }
   }
+
   const now = Date.now();
   const last = lastPostedAt.get(viewerId) || 0;
   if (now - last < COOLDOWN_MS) {
@@ -87,7 +154,46 @@ function checkComment(text, viewerId) {
 }
 
 // ---------------------------------------------
-// Botとして実際にTwitchチャットへ投稿する関数
+// Twitch公式のAutoMod判定APIを呼び出す関数。
+// あなたの配信のAutoMod設定(侮辱/差別/性的表現/いじめ等、8カテゴリ)を基準に、
+// このコメントが通常のチャットで許可されるレベルかどうかを判定してもらう。
+// ※これを機能させるには、Twitchの配信者設定(クリエイターダッシュボード→
+//   設定→モデレーション)でAutoModの各カテゴリのレベルを0以外に
+//   設定しておく必要があります。全部0(オフ)のままだと何も弾かれません。
+// ---------------------------------------------
+async function checkAutoMod(broadcasterId, text) {
+  if (!STREAMER_ACCESS_TOKEN) {
+    // トークンが未設定の場合は判定をスキップする(単語リストのみで運用)
+    return true;
+  }
+
+  const response = await fetch(
+    `https://api.twitch.tv/helix/moderation/enforcements/status?broadcaster_id=${broadcasterId}&moderator_id=${broadcasterId}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${STREAMER_ACCESS_TOKEN}`,
+        "Client-Id": BOT_CLIENT_ID,
+      },
+      body: JSON.stringify({
+        data: [{ msg_id: `${Date.now()}`, msg_text: text }],
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    // AutoMod判定でエラーが出ても、単語リストの判定は既に通っているので
+    // 投稿自体は続行させる(判定APIの一時不調でコメント機能を止めないため)
+    console.warn("AutoMod判定エラー(スキップして続行):", await response.text());
+    return true;
+  }
+
+  const result = await response.json();
+  // is_permitted が false なら、AutoMod的にNGと判断されたコメント
+  return result.data?.[0]?.is_permitted !== false;
+}
+
 // Twitch公式のHelix API「Send Chat Message」を呼び出す
 // ---------------------------------------------
 async function postToTwitchChat(broadcasterId, message) {
@@ -128,9 +234,17 @@ app.post("/comment", verifyTwitchJwt, async (req, res) => {
   }
 
   try {
-    // 匿名であることが伝わるように、接頭辞をつけてから投稿する
-    // (誰が送ったかは分からないが、視聴者からのコメントだと分かるようにする)
-    const anonMessage = `[匿名コメント] ${text}`;
+    // 単語リストを通過したコメントを、さらにTwitch公式のAutoMod基準でも確認する
+    const passedAutoMod = await checkAutoMod(channelId, text);
+    if (!passedAutoMod) {
+      return res.status(400).json({ error: "不適切な表現が含まれています" });
+    }
+
+    // 「誰が送ったか」は分からないが、
+    // 同じ人が送ったコメントかどうかは区別できるように、
+    // 短い匿名IDを頭につけてから投稿する
+    const anonId = getAnonId(viewerId);
+    const anonMessage = `[匿名:${anonId}] ${text}`;
 
     await postToTwitchChat(channelId, anonMessage);
 
