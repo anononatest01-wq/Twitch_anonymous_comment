@@ -69,11 +69,16 @@ function verifyTwitchJwt(req, res, next) {
 const ID_ROTATION = process.env.ID_ROTATION || "daily";
 
 // ---------------------------------------------
-// 表記ゆれ対策: 全角/半角をそろえたり、判定しやすい形に変換する
+// 表記ゆれ対策: 全角/半角、ひらがな/カタカナをそろえる
 // ---------------------------------------------
 function normalizeText(text) {
   // NFKC正規化: 全角英数字を半角に、全角記号を半角に、など表記ゆれをそろえる
-  return text.normalize("NFKC");
+  const nfkc = text.normalize("NFKC");
+  // ひらがなをすべてカタカナに変換する
+  // (ひらがなとカタカナの文字コードは0x60ずれているだけなので、その分ずらす)
+  return nfkc.replace(/[\u3041-\u3096]/g, (ch) =>
+    String.fromCharCode(ch.charCodeAt(0) + 0x60)
+  );
 }
 
 // ---------------------------------------------
@@ -185,8 +190,18 @@ async function checkModerationApi(text) {
   }
 
   const result = await response.json();
-  // flagged が true なら、不適切と判定されたコメント
-  return result.results?.[0]?.flagged !== true;
+  const flagged = result.results?.[0]?.flagged === true;
+
+  // 判定結果を必ずログに出す(動いているか確認できるように)
+  if (flagged) {
+    const categories = result.results[0].categories;
+    const hitCategories = Object.keys(categories).filter((k) => categories[k]);
+    console.log(`[OpenAI Moderation] ブロックしました。該当カテゴリ: ${hitCategories.join(", ")}`);
+  } else {
+    console.log("[OpenAI Moderation] 通過しました(問題なしと判定)");
+  }
+
+  return !flagged;
 }
 
 // Twitch公式のHelix API「Send Chat Message」を呼び出す
@@ -240,7 +255,7 @@ app.post("/comment", verifyTwitchJwt, async (req, res) => {
     // 同じ人が送ったコメントかどうかは区別できるように、
     // 短い匿名IDを頭につけてから投稿する
     const anonId = getAnonId(viewerId);
-    const anonMessage = `[ID:${anonId}] ${text}`;
+    const anonMessage = `[匿名:${anonId}] ${text}`;
 
     await postToTwitchChat(channelId, anonMessage);
 
