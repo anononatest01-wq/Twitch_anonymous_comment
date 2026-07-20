@@ -4,31 +4,31 @@
 <meta charset="UTF-8">
 <title>匿名コメント</title>
 <style>
-  /* 動画の上に重なるので、背景は必ず透明にする */
+  /* Componentは決まった大きさの箱として表示されるので、
+     動画オーバーレイと違って画面いっぱいに広げてOK */
   html, body {
     margin: 0;
     padding: 0;
-    background: transparent;
+    width: 100%;
+    height: 100%;
+    background: rgba(20, 20, 20, 0.9);
     font-family: sans-serif;
+    box-sizing: border-box;
   }
 
-  /* 画面の隅に小さく配置する。動画の邪魔をしすぎないサイズ感にする */
   #panel {
-    position: absolute;
-    bottom: 12px;
-    right: 12px;
-    width: 220px;
-    background: rgba(20, 20, 20, 0.85);
-    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
     padding: 10px;
     box-sizing: border-box;
   }
 
   textarea {
+    flex: 1;
     width: 100%;
-    height: 50px;
-    font-size: 13px;
-    padding: 6px;
+    font-size: 14px;
+    padding: 8px;
     border-radius: 6px;
     border: none;
     resize: none;
@@ -36,10 +36,10 @@
   }
 
   button {
-    margin-top: 6px;
+    margin-top: 8px;
     width: 100%;
-    padding: 6px;
-    font-size: 13px;
+    padding: 10px;
+    font-size: 14px;
     border-radius: 6px;
     border: none;
     background: #9147ff;
@@ -53,9 +53,9 @@
 
   #status {
     margin-top: 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: #ddd;
-    min-height: 14px;
+    min-height: 16px;
   }
 </style>
 </head>
@@ -67,34 +67,25 @@
   <div id="status"></div>
 </div>
 
-<!-- Twitchが提供している拡張機能用ヘルパーライブラリ -->
 <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
 <script>
-  // フロントエンドとEBSを同じサーバーから配信するので、
-  // 相対パス(空文字)でOK。ngrokでURLが変わっても書き換え不要
   const EBS_URL = "";
-
-  let authToken = null; // 視聴者ごとに発行されるJWT。これを毎回EBSに送る
+  let authToken = null;
 
   const input = document.getElementById("commentInput");
   const button = document.getElementById("sendButton");
   const status = document.getElementById("status");
 
-  // Twitchがこの拡張機能を「認証済み」にしたときに呼ばれる
-  // ここで視聴者ごとのJWT(auth.token)を受け取れる
   window.Twitch.ext.onAuthorized((auth) => {
     authToken = auth.token;
     button.disabled = false;
     button.textContent = "送信";
   });
 
-  // Enterキーで送信できるようにする(Shift+Enterは改行として扱う)
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault(); // 改行が入るのを防ぐ
-      if (!button.disabled) {
-        button.click();
-      }
+      e.preventDefault();
+      if (!button.disabled) button.click();
     }
   });
 
