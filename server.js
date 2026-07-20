@@ -120,8 +120,8 @@ function getAnonId(viewerId) {
   const hash = crypto
     .createHash("sha256")
     .update(`${viewerId}-${periodKey}`)
-    .digest("base62");
-  return hash.slice(0, 5).toUpperCase();
+    .digest("base64");
+  return hash.slice(0, 5);
 }
 
 
