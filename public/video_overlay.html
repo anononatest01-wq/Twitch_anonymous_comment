@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>匿名コメント</title>
+<style>
+  /* 動画の上に重なるので、背景は必ず透明にする */
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: sans-serif;
+  }
+
+  /* 画面の隅に小さく配置する。動画の邪魔をしすぎないサイズ感にする */
+  #panel {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    width: 220px;
+    background: rgba(20, 20, 20, 0.85);
+    border-radius: 10px;
+    padding: 10px;
+    box-sizing: border-box;
+  }
+
+  textarea {
+    width: 100%;
+    height: 50px;
+    font-size: 13px;
+    padding: 6px;
+    border-radius: 6px;
+    border: none;
+    resize: none;
+    box-sizing: border-box;
+  }
+
+  button {
+    margin-top: 6px;
+    width: 100%;
+    padding: 6px;
+    font-size: 13px;
+    border-radius: 6px;
+    border: none;
+    background: #9147ff;
+    color: #fff;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    background: #555;
+  }
+
+  #status {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #ddd;
+    min-height: 14px;
+  }
+</style>
+</head>
+<body>
+
+<div id="panel">
+  <textarea id="commentInput" maxlength="60" placeholder="匿名でコメント..."></textarea>
+  <button id="sendButton" disabled>準備中...</button>
+  <div id="status"></div>
+</div>
+
+<!-- Twitchが提供している拡張機能用ヘルパーライブラリ -->
+<script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
+<script>
+  // フロントエンドとEBSを同じサーバーから配信するので、
+  // 相対パス(空文字)でOK。ngrokでURLが変わっても書き換え不要
+  const EBS_URL = "";
+
+  let authToken = null; // 視聴者ごとに発行されるJWT。これを毎回EBSに送る
+
+  const input = document.getElementById("commentInput");
+  const button = document.getElementById("sendButton");
+  const status = document.getElementById("status");
+
+  // Twitchがこの拡張機能を「認証済み」にしたときに呼ばれる
+  // ここで視聴者ごとのJWT(auth.token)を受け取れる
+  window.Twitch.ext.onAuthorized((auth) => {
+    authToken = auth.token;
+    button.disabled = false;
+    button.textContent = "送信";
+  });
+
+  button.addEventListener("click", async () => {
+    const text = input.value.trim();
+    if (text.length === 0 || !authToken) return;
+
+    button.disabled = true;
+    status.textContent = "送信中...";
+
+    try {
+      const res = await fetch(`${EBS_URL}/comment`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ text }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        status.textContent = "送信しました！";
+        input.value = "";
+      } else {
+        status.textContent = data.error || "送信できませんでした";
+      }
+    } catch (err) {
+      status.textContent = "通信エラーが発生しました";
+    } finally {
+      button.disabled = false;
+    }
+  });
+</script>
+
+</body>
+</html>
