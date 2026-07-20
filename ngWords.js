@@ -2,15 +2,24 @@ const fs = require("fs");
 const path = require("path");
 
 // ---------------------------------------------
-// 手動で追加したい単語があれば、ここに書き足していけます。
-// (今は空です。外部リスト+AutoMod APIで十分にカバーできるため)
-// 文字列で追加: "単語",  正規表現で追加: /パターン/,
+// 手動で追加したい単語は、コードではなく
+// wordlists/my_words.txt というテキストファイルに
+// 1行1単語で書き足していくだけでOKです。
+// (このファイルが無ければ自動で作成されます)
 // ---------------------------------------------
-const MANUAL_WORDS = [];
+const MY_WORDS_PATH = path.join(__dirname, "wordlists", "my_words.txt");
+
+if (!fs.existsSync(MY_WORDS_PATH)) {
+  fs.mkdirSync(path.dirname(MY_WORDS_PATH), { recursive: true });
+  fs.writeFileSync(
+    MY_WORDS_PATH,
+    "# ここに1行1単語でNGワードを追加してください\n# 「#」で始まる行は無視されます\nクロンボ\n"
+  );
+}
 
 // ---------------------------------------------
 // 外部ファイルからワードリストを読み込む関数
-// 1行に1単語(または1つの正規表現パターン)の形式のテキストファイルを想定
+// 1行に1単語の形式のテキストファイルを想定
 // "#"で始まる行はコメントとして無視する
 // ファイルが無ければ警告だけ出してスキップする(エラーで落ちない)
 // ---------------------------------------------
@@ -48,25 +57,19 @@ function toLooseRegex(word) {
 }
 
 // ---------------------------------------------
-// 外部の実績あるリストを読み込む。
-// 以下からダウンロードして wordlists/ フォルダに置いてください(MITライセンス):
+// 外部の実績あるリストを読み込む(任意)。
+// 以下からダウンロードして wordlists/ フォルダに置けば読み込まれます(MITライセンス):
 //   https://raw.githubusercontent.com/MosasoM/inappropriate-words-ja/master/Offensive.txt
 //   https://raw.githubusercontent.com/MosasoM/inappropriate-words-ja/master/Sexual.txt
-//
-// 注意: Sexual_with_mask.txt は「AIの学習データ水増し用」に◯などの伏せ字記号を
-// 機械的に埋め込んだファイルで、単純な文字列一致では実質何も検出できないため
-// 採用していません。代わりに toLooseRegex() で同等以上の効果を持たせています。
 // ---------------------------------------------
-const EXTERNAL_WORDS_RAW = [
-  ...loadWordListFile("Offensive.txt"),  // 攻撃的/差別的表現
-  ...loadWordListFile("Sexual.txt"),     // 性的表現
+const ALL_WORDS_RAW = [
+  ...loadWordListFile("my_words.txt"),   // ← あなたが自由に追加していく分
+  ...loadWordListFile("Offensive.txt"),  // 攻撃的/差別的表現(任意)
+  ...loadWordListFile("Sexual.txt"),     // 性的表現(任意)
 ];
 
 // 読み込んだ単語をすべて「緩い正規表現」に変換しておく
-const EXTERNAL_WORDS = EXTERNAL_WORDS_RAW.map(toLooseRegex);
-const MANUAL_WORDS_CONVERTED = MANUAL_WORDS.map((w) =>
-  typeof w === "string" ? toLooseRegex(w) : w
-);
+const WORD_RULES = ALL_WORDS_RAW.map(toLooseRegex);
 
 
 // ---------------------------------------------
@@ -82,7 +85,7 @@ const PATTERN_RULES = [
   /(.)\1{9,}/,                                // 同じ文字を10回以上連打(荒らし対策)
 ];
 
-const NG_WORDS = [...MANUAL_WORDS_CONVERTED, ...EXTERNAL_WORDS, ...PATTERN_RULES];
+const NG_WORDS = [...WORD_RULES, ...PATTERN_RULES];
 
 console.log(`[ngWords] 読み込み完了: 合計 ${NG_WORDS.length} 件のルール`);
 
