@@ -29,7 +29,9 @@
   textarea {
     flex: 1;
     width: 100%;
-    font-size: 18px;
+    /* 表示エリアの横幅に応じて自動でサイズが変わるようにする。
+       最小14px、最大28px の範囲で、横幅の5%程度を目安のサイズにする */
+    font-size: clamp(14px, 5vw, 28px);
     padding: 10px;
     border-radius: 6px;
     border: none;
@@ -41,8 +43,8 @@
   button {
     margin-top: 8px;
     width: 100%;
-    padding: 14px;
-    font-size: 16px;
+    padding: 3vw 14px;
+    font-size: clamp(14px, 4.5vw, 24px);
     border-radius: 6px;
     border: none;
     background: #9147ff;
@@ -56,7 +58,7 @@
 
   #status {
     margin-top: 6px;
-    font-size: 14px;
+    font-size: clamp(12px, 3.5vw, 18px);
     color: #ddd;
     min-height: 18px;
   }
